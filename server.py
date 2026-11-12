@@ -286,25 +286,46 @@ def t_receipt_list(state, args):
 
 
 TOOLS = {
-    "profile_read": (t_profile_read, "Read one public Bluesky profile via the AT Protocol public API (app.bsky.actor.getProfile, no auth): DID, handle, counts, description — normalized, source endpoint named, receipted.",
-                     {"actor": {"type": "string"}}, ["actor"]),
-    "actor_search": (t_actor_search, "Search public Bluesky accounts (app.bsky.actor.searchActors): normalized profile summaries with the source endpoint named. Read-only discovery; no following or engagement action exists.",
-                     {"query": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]),
-    "author_feed_read": (t_author_feed_read, "Read a named account's recent original posts (app.bsky.feed.getAuthorFeed, posts_no_replies): text, timestamps, protocol counts, media presence — normalized with per-post provenance. No view metric is invented.",
-                         {"actor": {"type": "string"}, "limit": {"type": "integer"}}, ["actor"]),
-    "post_thread_read": (t_post_thread_read, "Read one post thread (app.bsky.feed.getPostThread): root post + direct replies, normalized and receipted.",
-                         {"uri": {"type": "string"}}, ["uri"]),
-    "receipt_list": (t_receipt_list, "The append-only, hash-chained receipt ledger — every read, success or failure — with chain verification.",
-                     {}, []),
+    "profile_read": (t_profile_read,
+                     "Read one public Bluesky account profile through the AT Protocol public API: DID, handle, display name, description, avatar, follower/following/post counts, and account creation date, normalized into snake_case fields. Use when you need one known account's identity or counts; use actor_search instead to find accounts by name or keyword when you do not know the handle, author_feed_read for the account's posts, and post_thread_read for a single post and its replies. Live external read: calls the public endpoint app.bsky.actor.getProfile at public.api.bsky.app with no authentication and no account of your own. Rate discipline is built in: calls are spaced at least 0.4 seconds apart, transient failures (timeout, connection reset, HTTP 5xx) retry up to twice while HTTP 4xx does not, and the whole server process stops making live calls after 60. Every call, success or failure, appends a hash-chained receipt to the local state file, so the tool is read-only toward Bluesky but not side-effect free locally; on failure it returns a named error and the failed read is still receipted. Returns an object with profile (including source_endpoint naming the endpoint the figures came from), retrieved_at as epoch seconds, mode READ_API, and receipt_seq.",
+                     {"actor": {"type": "string", "description": "Bluesky handle (for example 'name.bsky.social') or DID of the account to read. Required."}},
+                     ["actor"],
+                     {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+                     {"type": "object", "properties": {"profile": {"type": "object"}, "retrieved_at": {"type": "integer"}, "mode": {"type": "string"}, "receipt_seq": {"type": "integer"}}, "required": ["profile", "retrieved_at", "mode", "receipt_seq"]}),
+    "actor_search": (t_actor_search,
+                     "Search public Bluesky accounts by a free-text query through the AT Protocol public API and return normalized profile summaries (DID, handle, display name, description, follower/following/post counts, creation date) for each match. Use for discovery when you have a name or keyword but not an exact handle; use profile_read instead when you already know the exact account and want its single full profile, and author_feed_read to read a found account's posts. This is read-only discovery only: no following, liking, or any other engagement action exists in this server. Live external read against app.bsky.actor.searchActors at public.api.bsky.app with no authentication. The same rate discipline applies as for every live read here: at least 0.4 seconds between calls, up to two retries on transient failures only, and a 60 live-call ceiling per server process. Every call, success or failure, appends a hash-chained receipt to the local state file; failures return a named error and are still receipted. Returns an object with actors, count, cursor (pass back through the underlying API pagination concept; null when no further page is indicated), retrieved_at as epoch seconds, mode READ_API, and receipt_seq.",
+                     {"query": {"type": "string", "description": "Free-text search string matched against public accounts by the search endpoint. Required."},
+                      "limit": {"type": "integer", "description": "Maximum number of account summaries to return. Defaults to 10."}},
+                     ["query"],
+                     {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+                     {"type": "object", "properties": {"actors": {"type": "array", "items": {"type": "object"}}, "count": {"type": "integer"}, "cursor": {"type": ["string", "null"]}, "retrieved_at": {"type": "integer"}, "mode": {"type": "string"}, "receipt_seq": {"type": "integer"}}, "required": ["actors", "count", "retrieved_at", "mode", "receipt_seq"]}),
+    "author_feed_read": (t_author_feed_read,
+                         "Read a named public Bluesky account's recent original posts through the AT Protocol public API, excluding replies: each post is normalized to its URI, CID, author handle and DID, text, creation time, languages, the protocol's own like/repost/reply counts, and whether it carries image or video media. Use to review what one known account has posted; use profile_read for the account's profile and counts instead, actor_search to find the account first, and post_thread_read to expand one post into its reply thread. Live external read against app.bsky.feed.getAuthorFeed at public.api.bsky.app with no authentication. Counts are the protocol's own figures, named per post with source_endpoint, and no view metric is invented or estimated. Rate discipline: at least 0.4 seconds between live calls, up to two retries on transient failures only, and a 60 live-call ceiling per server process. Every call, success or failure, appends a hash-chained receipt to the local state file; failures return a named error and are still receipted. Returns an object with actor, posts, count, cursor, retrieved_at as epoch seconds, mode READ_API, a note restating the no-invented-metric rule, and receipt_seq.",
+                         {"actor": {"type": "string", "description": "Bluesky handle (for example 'name.bsky.social') or DID whose original posts should be read. Required."},
+                          "limit": {"type": "integer", "description": "Maximum number of feed items to return. Defaults to 20."}},
+                         ["actor"],
+                         {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+                         {"type": "object", "properties": {"actor": {"type": "string"}, "posts": {"type": "array", "items": {"type": "object"}}, "count": {"type": "integer"}, "cursor": {"type": ["string", "null"]}, "retrieved_at": {"type": "integer"}, "mode": {"type": "string"}, "note": {"type": "string"}, "receipt_seq": {"type": "integer"}}, "required": ["actor", "posts", "count", "retrieved_at", "mode", "receipt_seq"]}),
+    "post_thread_read": (t_post_thread_read,
+                         "Read one public Bluesky post thread through the AT Protocol public API: the root post plus its direct replies, each normalized with URI, CID, author handle and DID, text, creation time, languages, the protocol's own like/repost/reply counts, media presence, and source_endpoint naming this endpoint. Use when you have a specific post URI and need its conversational context; use author_feed_read instead to browse an account's recent posts, and profile_read for account-level information. Live external read against app.bsky.feed.getPostThread at public.api.bsky.app with no authentication. Only the root and its direct replies as returned by the endpoint are included; this tool does not page deeper into nested branches. Rate discipline: at least 0.4 seconds between live calls, up to two retries on transient failures only, and a 60 live-call ceiling per server process. Every call, success or failure, appends a hash-chained receipt to the local state file; failures return a named error and are still receipted. Returns an object with root, replies, reply_count, retrieved_at as epoch seconds, mode READ_API, and receipt_seq.",
+                         {"uri": {"type": "string", "description": "Full AT URI of the post to expand, in the form 'at://<did>/app.bsky.feed.post/<record-key>', as returned in feed or search results. Required."}},
+                         ["uri"],
+                         {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+                         {"type": "object", "properties": {"root": {"type": "object"}, "replies": {"type": "array", "items": {"type": "object"}}, "reply_count": {"type": "integer"}, "retrieved_at": {"type": "integer"}, "mode": {"type": "string"}, "receipt_seq": {"type": "integer"}}, "required": ["root", "replies", "reply_count", "retrieved_at", "mode", "receipt_seq"]}),
+    "receipt_list": (t_receipt_list,
+                     "List this server's local append-only receipt ledger: one hash-chained entry for every live read performed by profile_read, actor_search, author_feed_read, and post_thread_read, whether it succeeded or failed, each recording the endpoint, subject, status, and result count or error. Use to audit what was actually read and to verify the chain; use the four read tools themselves to fetch new Bluesky data instead. Fully local and read-only: no network call, no authentication, and it appends nothing. chain_valid is recomputed on every call by re-hashing each entry against its predecessor back to GENESIS, so a tampered or reordered ledger reports false. Returns an object with receipts (in sequence order), count, and chain_valid.",
+                     {},
+                     [],
+                     {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+                     {"type": "object", "properties": {"receipts": {"type": "array", "items": {"type": "object"}}, "count": {"type": "integer"}, "chain_valid": {"type": "boolean"}}, "required": ["receipts", "count", "chain_valid"]}),
 }
 
 
 def tool_list():
     return [{"name": name, "description": desc,
-             "inputSchema": {"type": "object", "properties": props, "required": req}}
-            for name, (_, desc, props, req) in TOOLS.items()]
-
-
+             "inputSchema": {"type": "object", "properties": props, "required": req},
+             "annotations": ann, "outputSchema": out}
+            for name, (_, desc, props, req, ann, out) in TOOLS.items()]
 def handle(req: dict):
     method, rid = req.get("method", ""), req.get("id")
     if method == "initialize":
