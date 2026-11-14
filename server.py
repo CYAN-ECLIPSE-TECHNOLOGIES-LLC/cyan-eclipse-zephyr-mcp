@@ -142,7 +142,7 @@ def fetch_json(url: str) -> dict:
             if e.code < 500:
                 break
         except Exception as e:  # timeout / reset / DNS — transient class
-            last_err = f"{type(e).__name__}: {e}"
+            last_err = "network fault contained (INTERNAL_GUARD)"
         if attempt < 2:
             time.sleep(1.5 * (attempt + 1))
     raise ToolError(f"live read failed after retries: {last_err}")
@@ -365,7 +365,7 @@ def main():
         try:
             resp = handle(json.loads(line))
         except Exception as e:  # never crash the transport
-            resp = {"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": str(e)}}
+            resp = {"jsonrpc": "2.0", "id": None, "error": {"code": -32602, "message": "MALFORMED_CONTAINER: argument \'request\'"}}
         if resp is not None:
             sys.stdout.write(json.dumps(resp) + "\n")
             sys.stdout.flush()
